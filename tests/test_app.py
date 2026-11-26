@@ -96,8 +96,13 @@ def test_structural_api_endpoints_end_to_end(tmp_path, monkeypatch):
 
 
 def test_database_api_persistence_and_retrieval(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("EARTHQUICK_DB_PATH", str(tmp_path / "api_test.db"))
     hdrs = [(b"content-type", b"application/json")]
+
+    st_h, body_h = _call_asgi("GET", "/api/health")
+    assert st_h == 200
+    assert json.loads(body_h) == {"status": "ok", "database": "sqlite"}
 
     # Clear initial history cleanly
     st_clr, _ = _call_asgi("DELETE", "/api/history")
@@ -175,3 +180,28 @@ def test_database_api_persistence_and_retrieval(tmp_path, monkeypatch):
     assert st_del == 200
     st_after, _ = _call_asgi("GET", f"/api/runs/quake/{run_id}")
     assert st_after == 404
+
+
+def test_app_startup_lifespan_initializes_postgres_schema(tmp_path, monkeypatch):
+    import db
+    from tests.test_db import _MockPgConnection
+
+    backing_file = str(tmp_path / "lifespan_pg.db")
+    queries: list[str] = []
+    events: list[str] = []
+
+    db._INITIALIZED_TARGETS.clear()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:secret@dpg-example:5432/earthquick")
+    monkeypatch.setattr(db.psycopg, "connect", lambda url, row_factory=None: _MockPgConnection(backing_file, queries, events))
+
+    async def _run_lifespan():
+        async with app.router.lifespan_context(app):
+            pass
+
+    asyncio.run(_run_lifespan())
+    assert any("CREATE TABLE IF NOT EXISTS buildings" in q for q in queries)
+    assert any("CREATE TABLE IF NOT EXISTS earthquake_runs" in q for q in queries)
+
+    st_h, body_h = _call_asgi("GET", "/api/health")
+    assert st_h == 200
+    assert json.loads(body_h) == {"status": "ok", "database": "postgres"}

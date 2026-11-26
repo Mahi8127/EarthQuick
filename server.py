@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import csv
 import io
 from pathlib import Path
@@ -109,7 +110,7 @@ async def index(_request: Request) -> FileResponse:
 
 
 async def health(_request: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok"})
+    return JSONResponse({"status": "ok", "database": "postgres" if db.get_database_url() else "sqlite"})
 
 
 async def favicon(_request: Request) -> Response:
@@ -315,9 +316,14 @@ async def api_earthquake_csv(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
 
-db.init_db()
+@asynccontextmanager
+async def lifespan(_app: Starlette):
+    db.init_db()
+    yield
+
 
 app = Starlette(
+    lifespan=lifespan,
     routes=[
         Route("/", index),
         Route("/favicon.ico", favicon),
