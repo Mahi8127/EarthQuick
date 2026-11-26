@@ -169,8 +169,8 @@ function renderFloorRows(floors, existingMasses = null, existingStiff = null) {
     const kVal = prevK[i] > 0 ? prevK[i] : 25000;
     row.innerHTML = `
       <span class="floor-tag">Floor ${i + 1}</span>
-      <input id="f-mass-${i}" class="m-in" type="number" min="1" max="10000" step="5" value="${mVal}" required aria-label="Floor ${i + 1} weight in tonnes">
-      <input id="f-stiff-${i}" class="k-in" type="number" min="100" max="1000000" step="500" value="${kVal}" required aria-label="Story ${i + 1} stiffness in kN/m">
+      <input id="f-mass-${i}" class="m-in" type="number" min="1" max="10000" step="1" value="${mVal}" required aria-label="Floor ${i + 1} weight in tonnes">
+      <input id="f-stiff-${i}" class="k-in" type="number" min="100" max="1000000" step="100" value="${kVal}" required aria-label="Story ${i + 1} stiffness in kN/m">
     `;
     container.append(row);
   }
