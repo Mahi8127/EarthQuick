@@ -89,10 +89,13 @@ def test_structural_api_endpoints_end_to_end(tmp_path, monkeypatch):
     eq_data = json.loads(body_eq)["earthquake"]
     assert eq_data["peak_roof_disp_mm"] > 0.0
 
-    # Invalid input returns 400 JSON error cleanly
-    bad = json.dumps({"masses": [120], "stiffnesses": [25000]}).encode()
-    st_bad, _ = _call_asgi("POST", "/api/matrices", bad, hdrs)
-    assert st_bad == 400
+    # Enforce 3-5 storeys on API endpoints (2 floors and 6 floors return 400)
+    for bad_floors in (1, 2, 6):
+        bad = json.dumps({"masses": [120] * bad_floors, "stiffnesses": [25000] * bad_floors}).encode()
+        st_bad, _ = _call_asgi("POST", "/api/matrices", bad, hdrs)
+        assert st_bad == 400
+        st_bad_b, _ = _call_asgi("POST", "/api/buildings", bad, hdrs)
+        assert st_bad_b == 400
 
 
 def test_database_api_persistence_and_retrieval(tmp_path, monkeypatch):
@@ -158,7 +161,41 @@ def test_database_api_persistence_and_retrieval(tmp_path, monkeypatch):
     assert eq_res["earthquake"]["risk_level"] in {"Low", "Moderate", "High", "Severe"}
     run_id = eq_res["run_id"]
 
-    # Retrieve persisted run detail, history, and buildings list
+    # Resonance check endpoint saves and retrieves separately from drift risk
+    res_req = json.dumps(
+        {
+            "building_id": b_id,
+            "masses": building["masses"],
+            "stiffnesses": building["stiffnesses"],
+            "damping_ratio": building["damping_ratio"],
+            "freq_min_hz": 0.5,
+            "freq_max_hz": 4.0,
+        }
+    ).encode()
+    st_res, body_res = _call_asgi("POST", "/api/resonance", res_req, hdrs)
+    assert st_res == 200
+    res_data = json.loads(body_res)
+    assert res_data["resonance"]["has_resonance_risk"] is True
+    assert res_data["resonance_id"] >= 1
+
+    # Storey stiffness comparison endpoint calculates, persists, and retrieves
+    cmp_req = json.dumps(
+        {
+            "building_id": b_id,
+            "masses": building["masses"],
+            "stiffnesses": building["stiffnesses"],
+            "damping_ratio": building["damping_ratio"],
+            "story_index": 1,
+            "pct_change": 30.0,
+        }
+    ).encode()
+    st_cmp, body_cmp = _call_asgi("POST", "/api/stiffness-compare", cmp_req, hdrs)
+    assert st_cmp == 200
+    cmp_data = json.loads(body_cmp)
+    assert len(cmp_data["comparison"]["modes"]) == 3
+    assert cmp_data["comparison"]["modes"][0]["change_pct"] > 0.0
+
+    # Retrieve persisted run details and history
     st_det, body_det = _call_asgi("GET", f"/api/runs/quake/{run_id}")
     assert st_det == 200
     detail = json.loads(body_det)["run"]
@@ -167,9 +204,15 @@ def test_database_api_persistence_and_retrieval(tmp_path, monkeypatch):
     assert len(detail["modal"]["phi_normalized"]) == 3
     assert detail["earthquake"]["risk_level"] == eq_res["earthquake"]["risk_level"]
 
+    st_res_det, _ = _call_asgi("GET", f"/api/runs/resonance/{res_data['resonance_id']}")
+    assert st_res_det == 200
+    st_cmp_det, _ = _call_asgi("GET", f"/api/runs/stiffness/{cmp_data['comparison_id']}")
+    assert st_cmp_det == 200
+
     st_hist, body_hist = _call_asgi("GET", "/api/history")
     assert st_hist == 200
-    assert len(json.loads(body_hist)["history"]) >= 1
+    hist_types = {item["run_type"] for item in json.loads(body_hist)["history"]}
+    assert {"quake", "resonance", "stiffness"}.issubset(hist_types)
 
     # Nonexistent building returns 404
     st_404, _ = _call_asgi("GET", "/api/buildings/999999")

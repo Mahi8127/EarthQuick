@@ -20,9 +20,12 @@ from engine import (
     analyze_matrices,
     assemble_mass_matrix,
     assemble_stiffness_matrix,
+    check_earthquake_resonance,
+    compare_storey_stiffness,
     generate_ground_motion,
     simulate_earthquake,
     solve_modal_analysis,
+    validate_building_inputs,
 )
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -173,6 +176,7 @@ async def api_run_detail(request: Request) -> JSONResponse:
 async def api_matrices(request: Request) -> JSONResponse:
     try:
         body = await request.json()
+        validate_building_inputs(body["masses"], body["stiffnesses"], float(body.get("damping_ratio", 0.05)))
         M = assemble_mass_matrix(body["masses"])
         K = assemble_stiffness_matrix(body["stiffnesses"])
         return JSONResponse(_serialize_matrices(analyze_matrices(M, K)))
@@ -185,6 +189,8 @@ async def api_modal(request: Request) -> JSONResponse:
         body = await request.json()
         masses = body["masses"]
         stiffnesses = body["stiffnesses"]
+        damping = float(body.get("damping_ratio", 0.05))
+        validate_building_inputs(masses, stiffnesses, damping)
         M = assemble_mass_matrix(masses)
         K = assemble_stiffness_matrix(stiffnesses)
         matrices_payload = _serialize_matrices(analyze_matrices(M, K))
@@ -193,7 +199,7 @@ async def api_modal(request: Request) -> JSONResponse:
             body.get("building_id"),
             body.get("building_name") or body.get("name"),
             body.get("building_type"),
-            float(body.get("damping_ratio", 0.05)),
+            damping,
             masses,
             stiffnesses,
         )
@@ -212,14 +218,94 @@ async def api_modal(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
 
+async def api_resonance(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        masses = body["masses"]
+        stiffnesses = body["stiffnesses"]
+        damping = float(body.get("damping_ratio", 0.05))
+        validate_building_inputs(masses, stiffnesses, damping)
+        freq_min = float(body["freq_min_hz"])
+        freq_max = float(body["freq_max_hz"])
+
+        M = assemble_mass_matrix(masses)
+        K = assemble_stiffness_matrix(stiffnesses)
+        matrices_payload = _serialize_matrices(analyze_matrices(M, K))
+        modal_payload = _serialize_modal(solve_modal_analysis(M, K))
+        resonance_payload = check_earthquake_resonance(modal_payload["frequencies_hz"], freq_min, freq_max)
+
+        building_id = _resolve_building_id(
+            body.get("building_id"),
+            body.get("building_name") or body.get("name"),
+            body.get("building_type"),
+            damping,
+            masses,
+            stiffnesses,
+        )
+        saved_modal = db.save_modal_analysis(building_id, matrices_payload, modal_payload)
+        saved_res = db.save_resonance_check(building_id, saved_modal["id"], resonance_payload)
+        return JSONResponse(
+            {
+                "building_id": building_id,
+                "modal_id": saved_modal["id"],
+                "resonance_id": saved_res["id"],
+                "matrices": matrices_payload,
+                "modal": modal_payload,
+                "resonance": resonance_payload,
+            }
+        )
+    except LookupError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except (KeyError, TypeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+async def api_stiffness_compare(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        masses = body["masses"]
+        stiffnesses = body["stiffnesses"]
+        damping = float(body.get("damping_ratio", 0.05))
+        validate_building_inputs(masses, stiffnesses, damping)
+
+        comparison = compare_storey_stiffness(
+            masses=masses,
+            stiffnesses=stiffnesses,
+            story_index=int(body["story_index"]),
+            pct_change=float(body["pct_change"]) if body.get("pct_change") not in (None, "") else None,
+            new_stiffness=float(body["new_stiffness"]) if body.get("new_stiffness") not in (None, "") else None,
+        )
+        building_id = _resolve_building_id(
+            body.get("building_id"),
+            body.get("building_name") or body.get("name"),
+            body.get("building_type"),
+            damping,
+            masses,
+            stiffnesses,
+        )
+        saved_cmp = db.save_stiffness_comparison(building_id, comparison)
+        return JSONResponse(
+            {
+                "building_id": building_id,
+                "comparison_id": saved_cmp["id"],
+                "comparison": comparison,
+            }
+        )
+    except LookupError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except (KeyError, TypeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
 async def api_earthquake(request: Request) -> JSONResponse:
     try:
         body = await request.json()
         masses = body["masses"]
         stiffnesses = body["stiffnesses"]
+        damping = float(body.get("damping_ratio", 0.05))
+        validate_building_inputs(masses, stiffnesses, damping)
         M = assemble_mass_matrix(masses)
         K = assemble_stiffness_matrix(stiffnesses)
-        damping = float(body.get("damping_ratio", 0.05))
         if "t" in body and "accel_g" in body:
             t = np.asarray(body["t"], dtype=float)
             ag = np.asarray(body["accel_g"], dtype=float)
@@ -269,6 +355,7 @@ async def api_earthquake_csv(request: Request) -> JSONResponse:
         masses = [float(x) for x in str(form["masses"]).split(",")]
         stiffnesses = [float(x) for x in str(form["stiffnesses"]).split(",")]
         damping = float(form.get("damping_ratio", 0.05))
+        validate_building_inputs(masses, stiffnesses, damping)
         upload = form["file"]
         raw = (await upload.read()).decode("utf-8-sig")
         rows = list(csv.reader(io.StringIO(raw)))
@@ -335,6 +422,8 @@ app = Starlette(
         Route("/api/runs/{run_type:str}/{run_id:int}", api_run_detail, methods=["GET"]),
         Route("/api/matrices", api_matrices, methods=["POST"]),
         Route("/api/modal", api_modal, methods=["POST"]),
+        Route("/api/resonance", api_resonance, methods=["POST"]),
+        Route("/api/stiffness-compare", api_stiffness_compare, methods=["POST"]),
         Route("/api/earthquake", api_earthquake, methods=["POST"]),
         Route("/api/earthquake/csv", api_earthquake_csv, methods=["POST"]),
         Mount("/static", app=StaticFiles(directory=str(WEB_DIR)), name="static"),

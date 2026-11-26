@@ -114,7 +114,7 @@
           <div class="card-grid-2">
             <article class="card">
               <h3>1. Building &amp; 3D preview</h3>
-              <p>Pick 2 to 10 floors, floor weights, and column stiffness. Watch the 3D frame update live.</p>
+              <p>Pick 3 to 5 floors, floor weights, and column stiffness. Watch the 3D frame update live.</p>
               <button type="button" class="btn btn-ghost btn-sm" data-jump="model">Open setup</button>
             </article>
             <article class="card">
@@ -170,8 +170,8 @@
 
               <div class="field">
                 <label for="b-floors">Floors: <output id="b-floors-out" class="mono">4</output></label>
-                <span class="hint">Pick 2 to 10 stories</span>
-                <input id="b-floors" name="floors" type="range" min="2" max="10" step="1" value="4">
+                <span class="hint">Pick 3 to 5 stories</span>
+                <input id="b-floors" name="floors" type="range" min="3" max="5" step="1" value="4">
               </div>
 
               <div class="field">
@@ -313,6 +313,37 @@
                 </table>
               </div>
             </div>
+
+            <div class="card stack-sm" id="resonance-card">
+              <div class="sub-head">
+                <div>
+                  <strong>Earthquake frequency resonance check</strong>
+                  <span class="hint block">Compares every natural frequency against an earthquake frequency band (separate from drift risk).</span>
+                </div>
+                <button type="button" id="btn-check-resonance" class="btn btn-primary btn-sm">Check resonance</button>
+              </div>
+              <div class="form-grid-2">
+                <div class="field">
+                  <label for="res-fmin">Min earthquake freq (Hz)</label>
+                  <input id="res-fmin" type="number" min="0" max="50" step="0.1" value="1.0">
+                </div>
+                <div class="field">
+                  <label for="res-fmax">Max earthquake freq (Hz)</label>
+                  <input id="res-fmax" type="number" min="0.05" max="50" step="0.1" value="3.5">
+                </div>
+              </div>
+              <p id="resonance-error" class="error-inline" role="alert" hidden></p>
+              <div id="resonance-results" hidden class="stack-sm">
+                <div id="resonance-banner" class="save-note" role="status"></div>
+                <div tabindex="0" role="region" aria-labelledby="res-tbl-cap" class="table-wrapper">
+                  <table id="resonance-table">
+                    <caption id="res-tbl-cap" class="visually-hidden">Resonance check per mode</caption>
+                    <thead><tr><th>Mode</th><th>Natural freq (Hz)</th><th>Period (s)</th><th>Status</th></tr></thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -398,8 +429,44 @@
         <div class="view-panel" id="view-compare" hidden>
           <div class="page-head">
             <div>
-              <h2>Compare runs</h2>
-              <p class="subtitle">Compare two earthquake runs side by side.</p>
+              <h2>Compare runs &amp; stiffness</h2>
+              <p class="subtitle">Test one storey's stiffness impact on frequencies, or compare two earthquake runs.</p>
+            </div>
+          </div>
+
+          <div class="card stack-sm" id="stiff-compare-card">
+            <div class="sub-head">
+              <div>
+                <strong>Storey stiffness comparison</strong>
+                <span class="hint block">Modify one storey by percentage or new kN/m value to compare all natural frequencies.</span>
+              </div>
+              <button type="button" id="btn-compare-stiffness" class="btn btn-primary btn-sm">Compare stiffness</button>
+            </div>
+            <div class="form-grid-3">
+              <div class="field">
+                <label for="stiff-story">Target storey</label>
+                <select id="stiff-story"></select>
+              </div>
+              <div class="field">
+                <label for="stiff-pct">Stiffness change (%)</label>
+                <input id="stiff-pct" type="number" min="-90" max="500" step="5" value="25">
+              </div>
+              <div class="field">
+                <label for="stiff-new-val">Or new stiffness (kN/m)</label>
+                <input id="stiff-new-val" type="number" min="100" max="1000000" step="500" placeholder="Optional override">
+              </div>
+            </div>
+            <p id="stiff-error" class="error-inline" role="alert" hidden></p>
+            <div id="stiff-compare-results" hidden class="stack-sm">
+              <p id="stiff-explanation" class="hint"></p>
+              <canvas id="chart-stiff-compare" height="210" aria-label="Original vs modified natural frequencies"></canvas>
+              <div tabindex="0" role="region" aria-labelledby="stiff-tbl-cap" class="table-wrapper">
+                <table id="stiff-compare-table">
+                  <caption id="stiff-tbl-cap" class="visually-hidden">Storey stiffness natural frequency comparison</caption>
+                  <thead><tr><th>Mode</th><th>Original (Hz)</th><th>Modified (Hz)</th><th>Change (%)</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
             </div>
           </div>
 

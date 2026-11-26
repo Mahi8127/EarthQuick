@@ -8,12 +8,58 @@ import numpy as np
 from scipy.linalg import eigh
 
 GRAVITY = 9.80665
+MIN_STOREYS = 3
+MAX_STOREYS = 5
 
 GROUND_MOTIONS = {
     "Broadband Seismic Pulse": "Realistic multi-frequency shaking envelope peaking early and decaying smoothly.",
     "Near-Fault Pulse (Low Frequency)": "Longer-period velocity pulse targeting mid-to-tall flexible frames.",
     "Harmonic Resonance Sweep": "Chirp sweep from 0.4 Hz to 6.0 Hz to excite fundamental and higher modes.",
 }
+
+
+def validate_building_inputs(
+    masses: Sequence[float],
+    stiffnesses: Sequence[float],
+    damping_ratio: float = 0.05,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Validate project building requirements: 3 to 5 storeys, positive m/k, damping in [0, 0.5]."""
+    m = _validate_positive_vector(masses, "masses")
+    k = _validate_positive_vector(stiffnesses, "stiffnesses")
+    if m.size != k.size or not (MIN_STOREYS <= m.size <= MAX_STOREYS):
+        raise ValueError(f"Building must have between {MIN_STOREYS} and {MAX_STOREYS} storeys.")
+    zeta = float(damping_ratio)
+    if not np.isfinite(zeta) or zeta < 0.0 or zeta > 0.5:
+        raise ValueError("Damping ratio must be between 0.0 and 0.5.")
+    return m, k, zeta
+
+
+def merge_sort_modes(modes: Sequence[dict]) -> list[dict]:
+    """Sort vibration mode dicts by natural frequency ascending using Merge Sort.
+
+    Time complexity: O(n log n) in best, average, and worst cases.
+    Space complexity: O(n) auxiliary storage for divide-and-conquer merging.
+    """
+    items = list(modes)
+    if len(items) <= 1:
+        return items
+
+    mid = len(items) // 2
+    left = merge_sort_modes(items[:mid])
+    right = merge_sort_modes(items[mid:])
+
+    merged: list[dict] = []
+    i = j = 0
+    while i < len(left) and j < len(right):
+        if float(left[i]["frequency_hz"]) <= float(right[j]["frequency_hz"]):
+            merged.append(left[i])
+            i += 1
+        else:
+            merged.append(right[j])
+            j += 1
+    merged.extend(left[i:])
+    merged.extend(right[j:])
+    return merged
 
 
 def _validate_positive_vector(values: Sequence[float], name: str) -> np.ndarray:
@@ -77,9 +123,16 @@ def solve_modal_analysis(M: np.ndarray, K: np.ndarray) -> dict:
     if not info["is_spd"]:
         raise ValueError("M and K must be symmetric positive definite for modal analysis.")
 
-    # kN/m divided by metric tonnes equals N/m divided by kg, so omega is directly in rad/s.
-    eigenvalues, phi_m = eigh(K, M)
-    eigenvalues = np.maximum(eigenvalues, 0.0)
+    # Sort eigenpairs explicitly by ascending natural frequency via DSA Merge Sort.
+    eigenvalues_raw, phi_raw = eigh(K, M)
+    eigenvalues_raw = np.maximum(eigenvalues_raw, 0.0)
+    freqs_raw = np.sqrt(eigenvalues_raw) / (2.0 * np.pi)
+    sorted_records = merge_sort_modes(
+        [{"index": i, "frequency_hz": float(freqs_raw[i])} for i in range(len(freqs_raw))]
+    )
+    order = [rec["index"] for rec in sorted_records]
+    eigenvalues = eigenvalues_raw[order]
+    phi_m = phi_raw[:, order]
     omega = np.sqrt(eigenvalues)
     frequencies_hz = omega / (2.0 * np.pi)
     periods_s = np.where(frequencies_hz > 0.0, 1.0 / frequencies_hz, np.inf)
@@ -256,3 +309,122 @@ def classify_seismic_risk(max_interstory_drift_mm: float, story_height_mm: float
     if ratio < 0.015:
         return "High"
     return "Severe"
+
+
+def check_earthquake_resonance(
+    frequencies_hz: Sequence[float],
+    freq_min_hz: float,
+    freq_max_hz: float,
+) -> dict:
+    """Check every building natural frequency against an earthquake excitation band [min, max] Hz."""
+    f_arr = np.asarray(frequencies_hz, dtype=float)
+    if f_arr.ndim != 1 or f_arr.size == 0 or not np.all(np.isfinite(f_arr)):
+        raise ValueError("frequencies_hz must be a non-empty finite 1D sequence.")
+    f_min = float(freq_min_hz)
+    f_max = float(freq_max_hz)
+    if not (np.isfinite(f_min) and np.isfinite(f_max)) or f_min < 0.0 or f_max <= 0.0 or f_min > f_max:
+        raise ValueError("Frequency range must satisfy 0 <= freq_min_hz <= freq_max_hz and freq_max_hz > 0.")
+
+    modes = []
+    at_risk_modes = []
+    for idx, freq in enumerate(f_arr):
+        f_val = float(freq)
+        in_range = f_min <= f_val <= f_max
+        entry = {
+            "mode": idx + 1,
+            "frequency_hz": f_val,
+            "period_s": (1.0 / f_val) if f_val > 0.0 else float("inf"),
+            "at_risk": bool(in_range),
+        }
+        modes.append(entry)
+        if in_range:
+            at_risk_modes.append(entry)
+
+    has_risk = len(at_risk_modes) > 0
+    if has_risk:
+        flagged = ", ".join(f"Mode {m['mode']} ({m['frequency_hz']:.3f} Hz)" for m in at_risk_modes)
+        summary = f"Potential resonance risk detected within {f_min:.2f}–{f_max:.2f} Hz: {flagged}."
+    else:
+        summary = f"No frequency overlap detected within {f_min:.2f}–{f_max:.2f} Hz."
+
+    return {
+        "freq_min_hz": f_min,
+        "freq_max_hz": f_max,
+        "has_resonance_risk": has_risk,
+        "at_risk_modes": at_risk_modes,
+        "modes": modes,
+        "summary": summary,
+    }
+
+
+def compare_storey_stiffness(
+    masses: Sequence[float],
+    stiffnesses: Sequence[float],
+    story_index: int,
+    pct_change: float | None = None,
+    new_stiffness: float | None = None,
+) -> dict:
+    """Compare natural frequencies before and after modifying one storey's stiffness."""
+    m_arr, k_orig_arr, _ = validate_building_inputs(masses, stiffnesses)
+    n = int(m_arr.size)
+    s_idx = int(story_index)
+    if s_idx < 1 or s_idx > n:
+        raise ValueError(f"story_index must be between 1 and {n}.")
+
+    orig_k = float(k_orig_arr[s_idx - 1])
+    if new_stiffness is not None:
+        mod_k = float(new_stiffness)
+        if not np.isfinite(mod_k) or mod_k <= 0.0:
+            raise ValueError("new_stiffness must be finite and > 0.")
+        actual_pct = 100.0 * (mod_k - orig_k) / orig_k
+    elif pct_change is not None:
+        actual_pct = float(pct_change)
+        if not np.isfinite(actual_pct) or actual_pct <= -100.0:
+            raise ValueError("pct_change must be finite and > -100%.")
+        mod_k = orig_k * (1.0 + actual_pct / 100.0)
+    else:
+        raise ValueError("Specify either pct_change or new_stiffness.")
+
+    k_mod_arr = k_orig_arr.copy()
+    k_mod_arr[s_idx - 1] = mod_k
+
+    M = assemble_mass_matrix(m_arr)
+    modal_orig = solve_modal_analysis(M, assemble_stiffness_matrix(k_orig_arr))
+    modal_mod = solve_modal_analysis(M, assemble_stiffness_matrix(k_mod_arr))
+
+    mode_comparisons = []
+    for idx in range(n):
+        f0 = float(modal_orig["frequencies_hz"][idx])
+        f1 = float(modal_mod["frequencies_hz"][idx])
+        delta_pct = 100.0 * (f1 - f0) / f0 if f0 > 0.0 else 0.0
+        mode_comparisons.append(
+            {
+                "mode": idx + 1,
+                "orig_freq_hz": f0,
+                "mod_freq_hz": f1,
+                "change_pct": delta_pct,
+                "orig_period_s": float(modal_orig["periods_s"][idx]),
+                "mod_period_s": float(modal_mod["periods_s"][idx]),
+            }
+        )
+
+    f1_delta = mode_comparisons[0]["change_pct"]
+    direction = "Increasing" if mod_k >= orig_k else "Decreasing"
+    effect = "raises" if f1_delta >= 0 else "lowers"
+    explanation = (
+        f"{direction} Storey {s_idx} stiffness from {orig_k:,.0f} to {mod_k:,.0f} kN/m ({actual_pct:+.1f}%) "
+        f"{effect} the fundamental sway frequency f₁ by {f1_delta:+.2f}%. Modes with large interstorey drift "
+        f"across Storey {s_idx} experience the strongest frequency shift via Rayleigh's quotient ω² = (φᵀKφ)/(φᵀMφ)."
+    )
+
+    return {
+        "n": n,
+        "story_index": s_idx,
+        "orig_stiffness_kn_m": orig_k,
+        "mod_stiffness_kn_m": mod_k,
+        "pct_change": actual_pct,
+        "orig_stiffnesses": k_orig_arr.tolist(),
+        "mod_stiffnesses": k_mod_arr.tolist(),
+        "modes": mode_comparisons,
+        "explanation": explanation,
+    }

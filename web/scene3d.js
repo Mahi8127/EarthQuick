@@ -209,7 +209,9 @@ export class BuildingScene3D {
 
   setStatic() {
     this.mode = 'static';
+    this.phase = 0;
     this._applyDisplacements(new Array(this.floors).fill(0), 0);
+    if (this.onTick) this.onTick({ time: 0, roofMm: 0, frac: 0 });
   }
 
   setModeShape(phiVec, freqHz) {
@@ -217,6 +219,9 @@ export class BuildingScene3D {
     this.modeShape = phiVec.slice(0, this.floors);
     this.modeFreq = Math.max(0.2, freqHz || 1.0);
     this.phase = 0;
+    this.playing = !this.reducedMotion;
+    this._applyDisplacements(new Array(this.floors).fill(0), 0);
+    if (this.onTick) this.onTick({ time: 0, roofMm: 0, frac: 0 });
   }
 
   setQuake(t, uMm, accelG) {
@@ -228,6 +233,11 @@ export class BuildingScene3D {
 
   setPlaying(flag) {
     this.playing = flag;
+    if (!flag && this.mode === 'mode') {
+      this.phase = 0;
+      this._applyDisplacements(new Array(this.floors).fill(0), 0);
+      if (this.onTick) this.onTick({ time: 0, roofMm: 0, frac: 0 });
+    }
   }
 
   setSpeed(speed) {

@@ -17,6 +17,7 @@ const state = {
   presets: [],
   history: [],
   compareRuns: [],
+  stiffComparison: null,
 };
 
 // ---------------- Theme & Responsive Navbar ----------------
@@ -143,13 +144,25 @@ function getDraftConfig() {
   };
 }
 
+function syncStiffnessStoryOptions(floors) {
+  const sel = document.getElementById('stiff-story');
+  if (!sel) return;
+  const prev = Number(sel.value || 1);
+  sel.innerHTML = '';
+  for (let i = 1; i <= floors; i++) {
+    sel.add(new Option(`Storey ${i}`, String(i)));
+  }
+  sel.value = String(Math.min(Math.max(1, prev), floors));
+}
+
 function renderFloorRows(floors, existingMasses = null, existingStiff = null) {
+  const safeFloors = Math.min(5, Math.max(3, Number(floors) || 4));
   const container = document.getElementById('floor-rows');
   const prevM = existingMasses || [...container.querySelectorAll('.m-in')].map((el) => Number(el.value));
   const prevK = existingStiff || [...container.querySelectorAll('.k-in')].map((el) => Number(el.value));
   container.innerHTML = '';
 
-  for (let i = 0; i < floors; i++) {
+  for (let i = 0; i < safeFloors; i++) {
     const row = document.createElement('div');
     row.className = 'floor-row';
     const mVal = prevM[i] > 0 ? prevM[i] : 120;
@@ -161,6 +174,7 @@ function renderFloorRows(floors, existingMasses = null, existingStiff = null) {
     `;
     container.append(row);
   }
+  syncStiffnessStoryOptions(safeFloors);
 }
 
 function markDirtyAndSync3D() {
@@ -189,20 +203,26 @@ function switchView(viewId) {
 
   const badge = document.getElementById('vp-mode-badge');
   const scrubber = document.getElementById('vp-scrubber');
+  const playBtn = document.getElementById('vp-play-btn');
   if (viewId === 'modes' && state.modal) {
     badge.textContent = '3D Mode';
     scrubber.disabled = true;
     const idx = Number(document.getElementById('mode-select').value || 0);
     scene3d.setModeShape(state.modal.phi_normalized.map((row) => row[idx]), state.modal.frequencies_hz[idx]);
+    if (playBtn) playBtn.textContent = scene3d.playing ? 'Pause' : 'Play';
     requestAnimationFrame(() => renderModalCharts(state.modal));
   } else if (viewId === 'quake' && state.quake) {
     badge.textContent = '3D Quake';
     scrubber.disabled = false;
     scene3d.setQuake(state.quake.t, state.quake.u_mm, state.quake.accel_g);
+    if (playBtn) playBtn.textContent = scene3d.playing ? 'Pause' : 'Play';
   } else {
     badge.textContent = 'Static';
     scrubber.disabled = true;
     scene3d.setStatic();
+  }
+  if (viewId === 'compare' && state.stiffComparison) {
+    requestAnimationFrame(() => renderStiffnessComparison(state.stiffComparison));
   }
   refreshStatusUI();
 }
@@ -244,6 +264,7 @@ function refreshStatusUI() {
   document.getElementById('matrices-results').hidden = !state.matrices;
   document.getElementById('modes-empty').hidden = Boolean(state.modal);
   document.getElementById('modes-results').hidden = !state.modal;
+  if (!state.modal) document.getElementById('resonance-results').hidden = true;
   document.getElementById('quake-empty').hidden = Boolean(state.quake);
   document.getElementById('quake-results').hidden = !state.quake;
   document.getElementById('compare-empty').hidden = state.compareRuns.length >= 2;
@@ -508,6 +529,8 @@ async function runModal() {
 
   document.getElementById('vp-mode-badge').textContent = '3D Mode';
   scene3d.setModeShape(data.modal.phi_normalized.map((r) => r[0]), data.modal.frequencies_hz[0]);
+  const playBtn = document.getElementById('vp-play-btn');
+  if (playBtn) playBtn.textContent = scene3d.playing ? 'Pause' : 'Play';
   refreshStatusUI();
   requestAnimationFrame(() => renderModalCharts(data.modal));
 }
@@ -643,6 +666,123 @@ function updateCompareView() {
     { name: `A: ${a.building}`, data: labels.map((_, i) => a.drift_profile[i] || 0), color: '#60a5fa' },
     { name: `B: ${b.building}`, data: labels.map((_, i) => b.drift_profile[i] || 0), color: '#38bdf8' },
   ]);
+}
+
+function renderResonanceResults(resData) {
+  const errEl = document.getElementById('resonance-error');
+  const box = document.getElementById('resonance-results');
+  const banner = document.getElementById('resonance-banner');
+  const tbody = document.querySelector('#resonance-table tbody');
+  errEl.hidden = true;
+  box.hidden = false;
+
+  banner.textContent = resData.summary;
+  banner.style.color = resData.has_resonance_risk ? 'var(--danger)' : 'var(--success)';
+
+  tbody.innerHTML = resData.modes.map((m) => `
+    <tr>
+      <th>Mode ${m.mode}</th>
+      <td data-label="Natural freq (Hz)">${m.frequency_hz.toFixed(3)}</td>
+      <td data-label="Period (s)">${m.period_s.toFixed(3)}</td>
+      <td data-label="Status">${m.at_risk ? '<strong style="color:var(--danger)">Resonance risk</strong>' : 'Outside band'}</td>
+    </tr>
+  `).join('');
+}
+
+async function runResonanceCheck() {
+  const cfg = requireSavedConfig();
+  if (!cfg) return;
+  const errEl = document.getElementById('resonance-error');
+  errEl.hidden = true;
+  const freqMin = Number(document.getElementById('res-fmin').value);
+  const freqMax = Number(document.getElementById('res-fmax').value);
+
+  const res = await fetch('/api/resonance', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      building_id: cfg.id || null,
+      building_name: cfg.building_name,
+      building_type: cfg.building_type,
+      damping_ratio: cfg.damping_ratio,
+      masses: cfg.masses,
+      stiffnesses: cfg.stiffnesses,
+      freq_min_hz: freqMin,
+      freq_max_hz: freqMax,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    errEl.textContent = data.error || 'Resonance check failed.';
+    errEl.hidden = false;
+    return;
+  }
+  renderMatricesResults(data.matrices);
+  renderModalResults(data.modal);
+  renderResonanceResults(data.resonance);
+  await refreshHistoryFromDb();
+  refreshStatusUI();
+}
+
+function renderStiffnessComparison(cmp) {
+  state.stiffComparison = cmp;
+  document.getElementById('stiff-compare-results').hidden = false;
+  document.getElementById('stiff-explanation').textContent = cmp.explanation;
+
+  const tbody = document.querySelector('#stiff-compare-table tbody');
+  tbody.innerHTML = cmp.modes.map((m) => `
+    <tr>
+      <th>Mode ${m.mode}</th>
+      <td data-label="Original (Hz)">${m.orig_freq_hz.toFixed(3)}</td>
+      <td data-label="Modified (Hz)">${m.mod_freq_hz.toFixed(3)}</td>
+      <td data-label="Change (%)">${m.change_pct >= 0 ? '+' : ''}${m.change_pct.toFixed(2)}%</td>
+    </tr>
+  `).join('');
+
+  drawBarChart('chart-stiff-compare', cmp.modes.map((m) => `M${m.mode}`), [
+    { name: 'Original (Hz)', data: cmp.modes.map((m) => m.orig_freq_hz), color: '#60a5fa' },
+    { name: 'Modified (Hz)', data: cmp.modes.map((m) => m.mod_freq_hz), color: '#34d399' },
+  ]);
+}
+
+async function runStiffnessComparison() {
+  const cfg = state.savedModel && !state.isDirty ? state.savedModel : getDraftConfig();
+  const errEl = document.getElementById('stiff-error');
+  errEl.hidden = true;
+  if (cfg.floors < 3 || cfg.floors > 5) {
+    errEl.textContent = 'Building must have between 3 and 5 storeys.';
+    errEl.hidden = false;
+    return;
+  }
+
+  const storyIndex = Number(document.getElementById('stiff-story').value || 1);
+  const newValRaw = document.getElementById('stiff-new-val').value.trim();
+  const pctRaw = document.getElementById('stiff-pct').value.trim();
+
+  const res = await fetch('/api/stiffness-compare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      building_id: state.savedModel && !state.isDirty ? state.savedModel.id || null : null,
+      building_name: cfg.building_name,
+      building_type: cfg.building_type,
+      damping_ratio: cfg.damping_ratio,
+      masses: cfg.masses,
+      stiffnesses: cfg.stiffnesses,
+      story_index: storyIndex,
+      new_stiffness: newValRaw !== '' ? Number(newValRaw) : null,
+      pct_change: newValRaw === '' && pctRaw !== '' ? Number(pctRaw) : null,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    errEl.textContent = data.error || 'Comparison failed.';
+    errEl.hidden = false;
+    return;
+  }
+  renderStiffnessComparison(data.comparison);
+  await Promise.all([refreshSavedBuildings(), refreshHistoryFromDb()]);
+  refreshStatusUI();
 }
 
 function renderHistoryTable() {
@@ -859,13 +999,18 @@ async function boot() {
   document.getElementById('building-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
+    const draft = getDraftConfig();
+    if (draft.floors < 3 || draft.floors > 5) {
+      document.getElementById('save-feedback').textContent = 'Building must have between 3 and 5 storeys.';
+      return;
+    }
     if (!form.checkValidity()) {
       [...form.elements].forEach((el) => { if (el.matches?.('input')) { el.dataset.touched = '1'; syncFieldAria(el, true); } });
       form.querySelector(':invalid')?.focus();
       return;
     }
     try {
-      const saved = await saveBuildingToDb(getDraftConfig());
+      const saved = await saveBuildingToDb(draft);
       document.getElementById('save-feedback').textContent = `Saved (#${saved.id}) at ${new Date().toLocaleTimeString()}`;
     } catch (err) {
       document.getElementById('save-feedback').textContent = err.message;
@@ -885,10 +1030,13 @@ async function boot() {
   // Action buttons
   document.getElementById('btn-gen-matrices').addEventListener('click', runMatrices);
   document.getElementById('btn-run-modes').addEventListener('click', runModal);
+  document.getElementById('btn-check-resonance').addEventListener('click', runResonanceCheck);
+  document.getElementById('btn-compare-stiffness').addEventListener('click', runStiffnessComparison);
   document.getElementById('mode-select').addEventListener('change', (e) => {
     if (!state.modal) return;
     const idx = Number(e.target.value);
     scene3d.setModeShape(state.modal.phi_normalized.map((r) => r[idx]), state.modal.frequencies_hz[idx]);
+    playBtn.textContent = scene3d.playing ? 'Pause' : 'Play';
   });
 
   document.querySelectorAll('.seg-btn').forEach((btn) => {

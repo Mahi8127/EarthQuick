@@ -175,14 +175,44 @@ def test_postgres_psycopg_crud_cascade_and_rollback(monkeypatch, tmp_path):
     events.clear()
     with pytest.raises(RuntimeError):
         with db._tx() as (conn, _):
-            conn.execute("INSERT INTO buildings (name, building_type, floors, damping_ratio) VALUES (%s, %s, %s, %s)", ("Tmp", "custom", 2, 0.05))
+            conn.execute("INSERT INTO buildings (name, building_type, floors, damping_ratio) VALUES (%s, %s, %s, %s)", ("Tmp", "custom", 3, 0.05))
             raise RuntimeError("abort tx")
     assert events == ["rollback", "close"]
     assert len(db.list_buildings()) == 1
 
-    # Foreign-key CASCADE deletes child modal and quake runs
+    # Persist resonance check and storey stiffness comparison linked to the building
+    res_payload = {
+        "freq_min_hz": 1.0,
+        "freq_max_hz": 3.5,
+        "has_resonance_risk": True,
+        "at_risk_modes": [{"mode": 1, "frequency_hz": 1.4, "period_s": 0.71, "at_risk": True}],
+        "modes": [{"mode": 1, "frequency_hz": 1.4, "period_s": 0.71, "at_risk": True}],
+        "summary": "Potential resonance risk detected within 1.00–3.50 Hz: Mode 1 (1.400 Hz).",
+    }
+    saved_res = db.save_resonance_check(saved["id"], saved_modal["id"], res_payload)
+    assert saved_res["has_resonance_risk"] is True
+
+    cmp_payload = {
+        "story_index": 1,
+        "orig_stiffness_kn_m": 32000.0,
+        "mod_stiffness_kn_m": 40000.0,
+        "pct_change": 25.0,
+        "modes": [{"mode": 1, "orig_freq_hz": 1.4, "mod_freq_hz": 1.5, "change_pct": 7.14}],
+        "explanation": "Increasing Storey 1 stiffness raises f1.",
+    }
+    saved_cmp = db.save_stiffness_comparison(saved["id"], cmp_payload)
+    assert saved_cmp["story_index"] == 1
+
+    history = db.list_history()
+    assert {item["run_type"] for item in history} == {"quake", "resonance", "stiffness"}
+    assert db.get_run_detail("resonance", saved_res["id"])["resonance"]["has_resonance_risk"] is True
+    assert db.get_run_detail("stiffness", saved_cmp["id"])["comparison"]["pct_change"] == pytest.approx(25.0)
+
+    # Foreign-key CASCADE deletes child modal, quake, resonance, and stiffness runs
     assert db.delete_building(saved["id"]) is True
     assert db.get_run_detail("quake", saved_quake["id"]) is None
+    assert db.get_run_detail("resonance", saved_res["id"]) is None
+    assert db.get_run_detail("stiffness", saved_cmp["id"]) is None
     assert db.list_history() == []
 
 
@@ -205,6 +235,8 @@ def test_sqlite_local_fallback_crud_and_validation(monkeypatch, tmp_path):
     assert db.list_buildings(db_path=db_file) == []
 
     with pytest.raises(ValueError):
-        db.save_building("One Floor", "custom", 0.05, [100.0], [20000.0], db_path=db_file)
+        db.save_building("Two Floors", "custom", 0.05, [100.0, 100.0], [20000.0, 20000.0], db_path=db_file)
     with pytest.raises(ValueError):
-        db.save_building("Bad Stiffness", "custom", 0.05, [100.0, 100.0], [20000.0, -5.0], db_path=db_file)
+        db.save_building("Six Floors", "custom", 0.05, [100.0] * 6, [20000.0] * 6, db_path=db_file)
+    with pytest.raises(ValueError):
+        db.save_building("Bad Stiffness", "custom", 0.05, [100.0, 100.0, 100.0], [20000.0, -5.0, 20000.0], db_path=db_file)
