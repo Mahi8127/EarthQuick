@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <title>EarthQuick — 3D Structural Vibration &amp; Quake Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="site-header" id="site-header">
+    <div class="header-inner">
+      <a class="site-logo" href="#overview" data-nav="overview">
+        <span class="logo-mark" aria-hidden="true">EQ</span>
+        <span class="logo-text">EarthQuick</span>
+        <span class="logo-pill">3D Lab</span>
+      </a>
+
+      <nav class="site-nav" aria-label="Primary">
+        <button
+          class="menu-button"
+          type="button"
+          popovertarget="site-menu"
+          popovertargetaction="toggle"
+          aria-controls="site-menu"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          <span>Menu</span>
+        </button>
+
+        <ul id="site-menu" class="site-menu" popover="auto">
+          <li><a href="#overview" data-nav="overview" aria-current="page">Overview</a></li>
+          <li><a href="#model" data-nav="model">Building</a></li>
+          <li><a href="#matrices" data-nav="matrices">Matrices</a></li>
+          <li><a href="#modes" data-nav="modes">Modes</a></li>
+          <li><a href="#quake" data-nav="quake">Earthquake</a></li>
+          <li><a href="#compare" data-nav="compare">Compare</a></li>
+          <li><a href="#history" data-nav="history">History</a></li>
+          <li><a href="#learn" data-nav="learn">Learn</a></li>
+        </ul>
+      </nav>
+
+      <div class="header-actions">
+        <span id="model-status-pill" class="status-pill status-draft">Draft</span>
+        <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle light or dark theme" title="Switch theme">
+          <svg id="theme-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <!-- 5-Step Progress Bar -->
+    <section class="stepper" aria-label="Analysis steps">
+      <button type="button" class="step-item is-current" data-step="0" data-jump="model">
+        <span class="step-num">1</span>
+        <span class="step-copy"><strong>Building</strong><small>Floors &amp; weights</small></span>
+      </button>
+      <button type="button" class="step-item" data-step="1" data-jump="matrices">
+        <span class="step-num">2</span>
+        <span class="step-copy"><strong>Matrices</strong><small>M &amp; K grids</small></span>
+      </button>
+      <button type="button" class="step-item" data-step="2" data-jump="modes">
+        <span class="step-num">3</span>
+        <span class="step-copy"><strong>Modes</strong><small>Sway speeds</small></span>
+      </button>
+      <button type="button" class="step-item" data-step="3" data-jump="quake">
+        <span class="step-num">4</span>
+        <span class="step-copy"><strong>Earthquake</strong><small>3D shake test</small></span>
+      </button>
+      <button type="button" class="step-item" data-step="4" data-jump="compare">
+        <span class="step-num">5</span>
+        <span class="step-copy"><strong>Compare</strong><small>Side by side</small></span>
+      </button>
+    </section>
+
+    <div class="split-shell">
+      <!-- Left / Main Active View -->
+      <section class="main-pane">
+        <!-- VIEW: OVERVIEW -->
+        <div class="view-panel" id="view-overview">
+          <div class="hero-card">
+            <span class="badge">3D Structural Lab</span>
+            <h1>See how buildings shake in earthquakes.</h1>
+            <p class="subtitle">Set your building floors, build M and K matrices, find sway modes, and watch the 3D frame move in real time.</p>
+            <div class="cta-row">
+              <button type="button" class="btn btn-primary" data-jump="model">Start building setup</button>
+              <button type="button" class="btn btn-ghost" data-jump="learn">Simple math guide</button>
+            </div>
+          </div>
+
+          <div class="kpi-grid">
+            <article class="kpi-card">
+              <span class="kpi-label">Model status</span>
+              <strong class="kpi-val" id="ov-status">Draft</strong>
+            </article>
+            <article class="kpi-card">
+              <span class="kpi-label">Floors</span>
+              <strong class="kpi-val" id="ov-floors">4</strong>
+            </article>
+            <article class="kpi-card">
+              <span class="kpi-label">Damping</span>
+              <strong class="kpi-val" id="ov-damping">5.0%</strong>
+            </article>
+            <article class="kpi-card">
+              <span class="kpi-label">Saved runs</span>
+              <strong class="kpi-val" id="ov-runs">0</strong>
+            </article>
+          </div>
+
+          <div class="card-grid-2">
+            <article class="card">
+              <h3>1. Building &amp; 3D preview</h3>
+              <p>Pick 2 to 10 floors, floor weights, and column stiffness. Watch the 3D frame update live.</p>
+              <button type="button" class="btn btn-ghost btn-sm" data-jump="model">Open setup</button>
+            </article>
+            <article class="card">
+              <h3>2. Mass &amp; stiffness grids</h3>
+              <p>Turn floor properties into clean M and K matrices with color heatmaps.</p>
+              <button type="button" class="btn btn-ghost btn-sm" data-jump="matrices">Open matrices</button>
+            </article>
+            <article class="card">
+              <h3>3. Sway speeds &amp; shapes</h3>
+              <p>Solve eigenvalues to animate each bending mode in 3D.</p>
+              <button type="button" class="btn btn-ghost btn-sm" data-jump="modes">Open modes</button>
+            </article>
+            <article class="card">
+              <h3>4. Live earthquake replay</h3>
+              <p>Shake the 3D building with a quake preset or your own CSV file.</p>
+              <button type="button" class="btn btn-ghost btn-sm" data-jump="quake">Open simulator</button>
+            </article>
+          </div>
+        </div>
+
+        <!-- VIEW: BUILDING MODEL -->
+        <div class="view-panel" id="view-model" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Building setup</h2>
+              <p class="subtitle">Choose floor count, weights, stiffness, and damping.</p>
+            </div>
+            <details class="tip-toggle">
+              <summary>Simple explanation</summary>
+              <p>Mass (t) is floor weight. Stiffness (kN/m) is how hard columns resist bending sideways. Damping slows shaking down.</p>
+            </details>
+          </div>
+
+          <form id="building-form" class="card stack-md" novalidate>
+            <div class="form-grid-2">
+              <div class="field">
+                <label for="b-name">Building name</label>
+                <span id="b-name-hint" class="hint">Short label for this model</span>
+                <input id="b-name" name="building_name" type="text" maxlength="60" required value="4-Story Frame" aria-describedby="b-name-hint" data-error="b-name-err">
+                <div id="b-name-err" class="error-msg">Enter a building name.</div>
+              </div>
+
+              <div class="field">
+                <label for="b-type">Frame style</label>
+                <span class="hint">Informational label</span>
+                <select id="b-type" name="building_type">
+                  <option>Standard Shear Frame</option>
+                  <option>Concrete Frame</option>
+                  <option>Steel Frame</option>
+                  <option>Custom Frame</option>
+                </select>
+              </div>
+
+              <div class="field">
+                <label for="b-floors">Floors: <output id="b-floors-out" class="mono">4</output></label>
+                <span class="hint">Pick 2 to 10 stories</span>
+                <input id="b-floors" name="floors" type="range" min="2" max="10" step="1" value="4">
+              </div>
+
+              <div class="field">
+                <label for="b-damping">Damping ratio (ζ)</label>
+                <span id="b-damp-hint" class="hint">0.05 = 5% (typical concrete)</span>
+                <input id="b-damping" name="damping_ratio" type="number" min="0" max="0.25" step="0.005" value="0.05" required aria-describedby="b-damp-hint" data-error="b-damp-err">
+                <div id="b-damp-err" class="error-msg">Enter damping between 0 and 0.25.</div>
+              </div>
+            </div>
+
+            <details class="sub-box">
+              <summary>Set all floors at once</summary>
+              <div class="form-grid-2 pad-top-sm">
+                <div class="inline-apply">
+                  <input id="u-mass" type="number" min="1" max="10000" step="10" value="120" aria-label="Uniform floor weight in tonnes">
+                  <button type="button" id="apply-u-mass" class="btn btn-ghost btn-sm">Set all weights (t)</button>
+                </div>
+                <div class="inline-apply">
+                  <input id="u-stiff" type="number" min="100" max="1000000" step="500" value="25000" aria-label="Uniform story stiffness in kN/m">
+                  <button type="button" id="apply-u-stiff" class="btn btn-ghost btn-sm">Set all stiffness (kN/m)</button>
+                </div>
+              </div>
+            </details>
+
+            <div>
+              <div class="sub-head">
+                <strong>Floor weights &amp; column stiffness</strong>
+                <span class="hint">Updates 3D view live</span>
+              </div>
+              <div id="floor-rows" class="floor-rows"></div>
+            </div>
+
+            <div class="action-bar">
+              <button type="submit" id="save-model-btn" class="btn btn-primary">Save building</button>
+              <button type="button" id="reset-model-btn" class="btn btn-ghost">Reset defaults</button>
+              <span id="save-feedback" class="save-note" role="status"></span>
+            </div>
+          </form>
+        </div>
+
+        <!-- VIEW: MATRICES -->
+        <div class="view-panel" id="view-matrices" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Matrices (M &amp; K)</h2>
+              <p class="subtitle">Turns floor weights and stiffness into two clean grids.</p>
+            </div>
+            <div class="cta-row">
+              <button type="button" id="btn-gen-matrices" class="btn btn-primary">Generate matrices</button>
+              <button type="button" class="btn btn-ghost" data-jump="modes">Next: modes</button>
+            </div>
+          </div>
+
+          <div id="matrices-empty" class="empty-card">
+            <strong>Ready to build M &amp; K</strong>
+            <p>Save your building first, then click Generate matrices.</p>
+            <button type="button" class="btn btn-primary btn-sm" data-jump="model">Open building setup</button>
+          </div>
+
+          <div id="matrices-results" hidden class="stack-md">
+            <div class="kpi-grid">
+              <article class="kpi-card"><span class="kpi-label">Grid size</span><strong class="kpi-val" id="mat-dim">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Valid check</span><strong class="kpi-val" id="mat-spd">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Condition no.</span><strong class="kpi-val" id="mat-cond">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Sparsity</span><strong class="kpi-val" id="mat-sparse">-</strong></article>
+            </div>
+            <div class="card-grid-2">
+              <div class="card">
+                <div class="sub-head"><strong>Mass matrix M (t)</strong><button type="button" id="dl-m-csv" class="btn btn-ghost btn-sm">CSV</button></div>
+                <div id="heatmap-m" class="heatmap-box"></div>
+              </div>
+              <div class="card">
+                <div class="sub-head"><strong>Stiffness matrix K (kN/m)</strong><button type="button" id="dl-k-csv" class="btn btn-ghost btn-sm">CSV</button></div>
+                <div id="heatmap-k" class="heatmap-box"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- VIEW: MODES -->
+        <div class="view-panel" id="view-modes" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Vibration modes</h2>
+              <p class="subtitle">Finds how fast your building sways and how it bends.</p>
+            </div>
+            <div class="cta-row">
+              <button type="button" id="btn-run-modes" class="btn btn-primary">Solve modes</button>
+              <button type="button" class="btn btn-ghost" data-jump="quake">Next: earthquake</button>
+            </div>
+          </div>
+
+          <div id="modes-empty" class="empty-card">
+            <strong>Ready to find sway modes</strong>
+            <p>Save your building, then click Solve modes to animate them in 3D.</p>
+            <button type="button" class="btn btn-primary btn-sm" data-jump="model">Open building setup</button>
+          </div>
+
+          <div id="modes-results" hidden class="stack-md">
+            <div class="kpi-grid">
+              <article class="kpi-card"><span class="kpi-label">Main speed (f₁)</span><strong class="kpi-val" id="mod-f1">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Sway time (T₁)</span><strong class="kpi-val" id="mod-t1">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Mode 1 share</span><strong class="kpi-val" id="mod-m1">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Math error</span><strong class="kpi-val" id="mod-err">-</strong></article>
+            </div>
+
+            <div class="card stack-sm">
+              <div class="sub-head">
+                <strong>3D Mode preview</strong>
+                <div class="inline-apply">
+                  <label for="mode-select" class="hint">Mode:</label>
+                  <select id="mode-select"></select>
+                </div>
+              </div>
+              <div class="chart-row-2">
+                <canvas id="chart-mode-shapes" height="240" aria-label="Normalized mode shapes curve"></canvas>
+                <canvas id="chart-mode-mass" height="240" aria-label="Weight share per mode"></canvas>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="sub-head"><strong>All modes</strong><button type="button" id="dl-modes-csv" class="btn btn-ghost btn-sm">CSV</button></div>
+              <div tabindex="0" role="region" aria-labelledby="modes-tbl-cap" class="table-wrapper">
+                <table id="modes-table">
+                  <caption id="modes-tbl-cap" class="visually-hidden">Computed vibration modes</caption>
+                  <thead><tr><th>Mode</th><th>Speed (Hz)</th><th>Time T (s)</th><th>Weight share (%)</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- VIEW: EARTHQUAKE -->
+        <div class="view-panel" id="view-quake" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Earthquake simulator</h2>
+              <p class="subtitle">Shake your building and inspect floor movement &amp; story shift.</p>
+            </div>
+            <div class="cta-row">
+              <button type="button" id="btn-run-quake" class="btn btn-primary">Run simulation</button>
+              <button type="button" class="btn btn-ghost" data-jump="compare">Compare runs</button>
+            </div>
+          </div>
+
+          <div class="card stack-sm">
+            <div class="seg-row" role="group" aria-label="Quake source">
+              <button type="button" class="seg-btn is-active" data-qsrc="preset">Built-in quake</button>
+              <button type="button" class="seg-btn" data-qsrc="csv">Upload CSV</button>
+            </div>
+
+            <div id="quake-preset-controls" class="form-grid-3">
+              <div class="field">
+                <label for="q-preset">Quake pattern</label>
+                <select id="q-preset"></select>
+              </div>
+              <div class="field">
+                <label for="q-pga">Strength: <output id="q-pga-out" class="mono">0.30 g</output></label>
+                <input id="q-pga" type="range" min="0.05" max="1.00" step="0.05" value="0.30">
+              </div>
+              <div class="field">
+                <label for="q-dur">Length: <output id="q-dur-out" class="mono">20 s</output></label>
+                <input id="q-dur" type="range" min="10" max="40" step="5" value="20">
+              </div>
+            </div>
+
+            <div id="quake-csv-controls" hidden class="field">
+              <label for="q-csv-file">CSV file (2 columns: time_s, accel_g)</label>
+              <input id="q-csv-file" type="file" accept=".csv">
+            </div>
+            <p id="quake-error" class="error-inline" role="alert" hidden></p>
+          </div>
+
+          <div id="quake-empty" class="empty-card">
+            <strong>Ready to shake</strong>
+            <p>Pick a quake above and click Run simulation to animate the 3D building.</p>
+          </div>
+
+          <div id="quake-results" hidden class="stack-md">
+            <div class="kpi-grid">
+              <article class="kpi-card"><span class="kpi-label">Max roof move</span><strong class="kpi-val" id="eq-roof">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Max story shift</span><strong class="kpi-val" id="eq-drift">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Base force</span><strong class="kpi-val" id="eq-shear">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Strength (PGA)</span><strong class="kpi-val" id="eq-pga">-</strong></article>
+            </div>
+
+            <div class="chart-row-2">
+              <div class="card">
+                <strong>Movement over time (mm)</strong>
+                <canvas id="chart-time-history" height="230" aria-label="Floor 1 and roof displacement over time"></canvas>
+              </div>
+              <div class="card">
+                <strong>Max move &amp; shift per floor</strong>
+                <canvas id="chart-drift-bars" height="230" aria-label="Peak movement and shift per floor"></canvas>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="sub-head"><strong>Peak floor results</strong><button type="button" id="dl-quake-csv" class="btn btn-ghost btn-sm">CSV</button></div>
+              <div tabindex="0" role="region" aria-labelledby="eq-tbl-cap" class="table-wrapper">
+                <table id="eq-table">
+                  <caption id="eq-tbl-cap" class="visually-hidden">Peak displacement and drift per level</caption>
+                  <thead><tr><th>Level</th><th>Max move (mm)</th><th>Max shift (mm)</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- VIEW: COMPARE -->
+        <div class="view-panel" id="view-compare" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Compare runs</h2>
+              <p class="subtitle">Compare two earthquake runs side by side.</p>
+            </div>
+          </div>
+
+          <div id="compare-empty" class="empty-card">
+            <strong>Need 2 earthquake runs</strong>
+            <p>Change a building setting, save, and run a second simulation to compare.</p>
+            <button type="button" class="btn btn-primary btn-sm" data-jump="quake">Open earthquake sim</button>
+          </div>
+
+          <div id="compare-results" hidden class="stack-md">
+            <div class="card form-grid-2">
+              <div class="field"><label for="cmp-a">Run A (baseline)</label><select id="cmp-a"></select></div>
+              <div class="field"><label for="cmp-b">Run B (new)</label><select id="cmp-b"></select></div>
+            </div>
+            <div class="kpi-grid">
+              <article class="kpi-card"><span class="kpi-label">Sway time (T₁)</span><strong class="kpi-val" id="cmp-t1">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Roof move</span><strong class="kpi-val" id="cmp-roof">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Max story shift</span><strong class="kpi-val" id="cmp-drift">-</strong></article>
+              <article class="kpi-card"><span class="kpi-label">Base force</span><strong class="kpi-val" id="cmp-shear">-</strong></article>
+            </div>
+            <div class="card">
+              <strong>Story shift profile (A vs B)</strong>
+              <canvas id="chart-compare" height="240" aria-label="Story shift comparison chart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- VIEW: HISTORY -->
+        <div class="view-panel" id="view-history" hidden>
+          <div class="page-head">
+            <div>
+              <h2>History</h2>
+              <p class="subtitle">Your saved runs in this browser.</p>
+            </div>
+            <div class="cta-row">
+              <button type="button" id="dl-history-csv" class="btn btn-ghost btn-sm">CSV</button>
+              <button type="button" id="clear-history-btn" class="btn btn-ghost btn-sm">Clear</button>
+            </div>
+          </div>
+          <div id="history-empty" class="empty-card">
+            <strong>No saved runs yet</strong>
+            <p>Run Modes or Earthquake Sim to save results here automatically.</p>
+            <button type="button" class="btn btn-primary btn-sm" data-jump="quake">Open earthquake sim</button>
+          </div>
+          <div id="history-table-card" class="card" hidden>
+            <div tabindex="0" role="region" aria-labelledby="hist-tbl-cap" class="table-wrapper">
+              <table id="history-table">
+                <caption id="hist-tbl-cap" class="visually-hidden">Saved analysis history</caption>
+                <thead><tr><th>Time</th><th>Type</th><th>Building</th><th>Floors</th><th>T₁ (s)</th><th>Roof (mm)</th><th>Max shift (mm)</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- VIEW: LEARN -->
+        <div class="view-panel" id="view-learn" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Learning centre</h2>
+              <p class="subtitle">Simple guide to the math behind shaking buildings.</p>
+            </div>
+          </div>
+
+          <div class="tabs-card card">
+            <div class="tablist" role="tablist" aria-label="Linear algebra topics">
+              <button type="button" role="tab" id="tab-1" aria-selected="true" tabindex="0">1. Matrices</button>
+              <button type="button" role="tab" id="tab-2" aria-selected="false" tabindex="-1">2. Sway modes</button>
+              <button type="button" role="tab" id="tab-3" aria-selected="false" tabindex="-1">3. Independence</button>
+              <button type="button" role="tab" id="tab-4" aria-selected="false" tabindex="-1">4. Quake math</button>
+            </div>
+            <div role="tabpanel" id="panel-1" aria-labelledby="tab-1" tabindex="0" class="tab-panel">
+              <h3>Why use matrices?</h3>
+              <p>Instead of one equation per floor, <strong>M</strong> (weights) and <strong>K</strong> (stiffness) pack the whole building into two neat grids.</p>
+              <p class="formula">K · u = f</p>
+            </div>
+            <div role="tabpanel" id="panel-2" aria-labelledby="tab-2" hidden="until-found" class="tab-panel">
+              <h3>What are modes &amp; frequencies?</h3>
+              <p>Each mode is a natural sway pattern. The eigenvalue gives sway speed, and the eigenvector gives the bent shape.</p>
+              <p class="formula">(K − ω²M) φ = 0</p>
+            </div>
+            <div role="tabpanel" id="panel-3" aria-labelledby="tab-3" hidden="until-found" class="tab-panel">
+              <h3>Why modes stay independent</h3>
+              <p>Mode shapes are orthogonal under M and K, turning coupled grids into clean diagonal numbers.</p>
+              <p class="formula">Φᵀ M Φ = I ,  Φᵀ K Φ = Λ</p>
+            </div>
+            <div role="tabpanel" id="panel-4" aria-labelledby="tab-4" hidden="until-found" class="tab-panel">
+              <h3>Splitting an earthquake into simple steps</h3>
+              <p>Using mode coordinates solves each mode like a single pendulum, then adds them back together.</p>
+              <p class="formula">q̈ᵢ + 2ζωᵢq̇ᵢ + ωᵢ²qᵢ = −Γᵢ ü_g(t)</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right: Persistent Interactive 3D Building Viewport -->
+      <aside class="viewport-pane" aria-label="Interactive 3D building view">
+        <div class="card viewport-card">
+          <div class="sub-head">
+            <div>
+              <strong id="vp-title">3D Frame Preview</strong>
+              <span id="vp-subtitle" class="hint block">Drag to rotate · Scroll to zoom</span>
+            </div>
+            <span id="vp-mode-badge" class="badge">Static</span>
+          </div>
+
+          <div id="scene3d-mount" class="scene3d-mount">
+            <canvas id="scene3d-canvas" aria-label="3D shear building animation"></canvas>
+          </div>
+
+          <div class="vp-controls">
+            <button type="button" id="vp-play-btn" class="btn btn-primary btn-sm" aria-label="Pause or play 3D animation">Pause</button>
+            <input id="vp-scrubber" type="range" min="0" max="100" value="0" aria-label="Simulation timeline scrubber" disabled>
+            <select id="vp-speed" aria-label="Playback speed">
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+            </select>
+            <button type="button" id="vp-reset-cam" class="btn btn-ghost btn-sm" title="Reset 3D camera">Reset</button>
+          </div>
+          <div class="sub-head pad-top-sm">
+            <p id="vp-readout" class="hint mono">t = 0.00 s · Roof = 0.0 mm</p>
+            <button type="button" id="vp-demo-quake" class="btn btn-ghost btn-sm">Test 3D shake</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
