@@ -65,7 +65,8 @@ def test_web_pages_and_assets_served():
         assert st_code == 200 and len(asset_body) > 100
 
 
-def test_structural_api_endpoints_end_to_end():
+def test_structural_api_endpoints_end_to_end(tmp_path, monkeypatch):
+    monkeypatch.setenv("EARTHQUICK_DB_PATH", str(tmp_path / "e2e_test.db"))
     st_code, payload = _call_asgi("GET", "/api/presets")
     assert st_code == 200
     assert len(json.loads(payload)["presets"]) == 3
@@ -92,3 +93,85 @@ def test_structural_api_endpoints_end_to_end():
     bad = json.dumps({"masses": [120], "stiffnesses": [25000]}).encode()
     st_bad, _ = _call_asgi("POST", "/api/matrices", bad, hdrs)
     assert st_bad == 400
+
+
+def test_database_api_persistence_and_retrieval(tmp_path, monkeypatch):
+    monkeypatch.setenv("EARTHQUICK_DB_PATH", str(tmp_path / "api_test.db"))
+    hdrs = [(b"content-type", b"application/json")]
+
+    # Clear initial history cleanly
+    st_clr, _ = _call_asgi("DELETE", "/api/history")
+    assert st_clr == 200
+
+    # Save building configuration + floor properties
+    b_req = json.dumps(
+        {
+            "name": "Steel Lab Frame",
+            "building_type": "Steel Frame",
+            "damping_ratio": 0.04,
+            "masses": [110, 100, 90],
+            "stiffnesses": [26000, 24000, 22000],
+        }
+    ).encode()
+    st_b, body_b = _call_asgi("POST", "/api/buildings", b_req, hdrs)
+    assert st_b == 201
+    building = json.loads(body_b)["building"]
+    b_id = building["id"]
+    assert building["floors"] == 3
+    assert building["masses"] == [110.0, 100.0, 90.0]
+
+    # Run modal analysis linked to building_id -> persists eigenvalues & mode shapes
+    mod_req = json.dumps(
+        {
+            "building_id": b_id,
+            "masses": building["masses"],
+            "stiffnesses": building["stiffnesses"],
+            "damping_ratio": building["damping_ratio"],
+        }
+    ).encode()
+    st_mod, body_mod = _call_asgi("POST", "/api/modal", mod_req, hdrs)
+    assert st_mod == 200
+    mod_res = json.loads(body_mod)
+    assert len(mod_res["modal"]["eigenvalues"]) == 3
+    assert mod_res["modal_id"] >= 1
+
+    # Run earthquake simulation linked to building_id -> persists drift & risk_level
+    eq_req = json.dumps(
+        {
+            "building_id": b_id,
+            "masses": building["masses"],
+            "stiffnesses": building["stiffnesses"],
+            "damping_ratio": building["damping_ratio"],
+            "preset_name": "Broadband Seismic Pulse",
+            "pga_g": 0.35,
+            "duration_s": 10.0,
+        }
+    ).encode()
+    st_eq, body_eq = _call_asgi("POST", "/api/earthquake", eq_req, hdrs)
+    assert st_eq == 200
+    eq_res = json.loads(body_eq)
+    assert eq_res["earthquake"]["risk_level"] in {"Low", "Moderate", "High", "Severe"}
+    run_id = eq_res["run_id"]
+
+    # Retrieve persisted run detail, history, and buildings list
+    st_det, body_det = _call_asgi("GET", f"/api/runs/quake/{run_id}")
+    assert st_det == 200
+    detail = json.loads(body_det)["run"]
+    assert detail["building"]["name"] == "Steel Lab Frame"
+    assert len(detail["modal"]["eigenvalues"]) == 3
+    assert len(detail["modal"]["phi_normalized"]) == 3
+    assert detail["earthquake"]["risk_level"] == eq_res["earthquake"]["risk_level"]
+
+    st_hist, body_hist = _call_asgi("GET", "/api/history")
+    assert st_hist == 200
+    assert len(json.loads(body_hist)["history"]) >= 1
+
+    # Nonexistent building returns 404
+    st_404, _ = _call_asgi("GET", "/api/buildings/999999")
+    assert st_404 == 404
+
+    # Delete cascades cleanly
+    st_del, _ = _call_asgi("DELETE", f"/api/buildings/{b_id}")
+    assert st_del == 200
+    st_after, _ = _call_asgi("GET", f"/api/runs/quake/{run_id}")
+    assert st_after == 404

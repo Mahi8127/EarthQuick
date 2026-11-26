@@ -204,6 +204,17 @@
               <div id="floor-rows" class="floor-rows"></div>
             </div>
 
+            <div id="saved-buildings-bar" class="sub-box" hidden>
+              <div class="sub-head">
+                <label for="saved-building-select"><strong>Saved buildings</strong></label>
+                <span class="hint">Stored in SQLite</span>
+              </div>
+              <div class="inline-apply">
+                <select id="saved-building-select" aria-label="Load saved building from database"></select>
+                <button type="button" id="delete-building-btn" class="btn btn-ghost btn-sm">Delete</button>
+              </div>
+            </div>
+
             <div class="action-bar">
               <button type="submit" id="save-model-btn" class="btn btn-primary">Save building</button>
               <button type="button" id="reset-model-btn" class="btn btn-ghost">Reset defaults</button>
@@ -421,7 +432,7 @@
           <div class="page-head">
             <div>
               <h2>History</h2>
-              <p class="subtitle">Your saved runs in this browser.</p>
+              <p class="subtitle">Your saved runs in the SQLite database.</p>
             </div>
             <div class="cta-row">
               <button type="button" id="dl-history-csv" class="btn btn-ghost btn-sm">CSV</button>

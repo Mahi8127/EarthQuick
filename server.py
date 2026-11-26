@@ -13,6 +13,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+import db
 from engine import (
     GROUND_MOTIONS,
     analyze_matrices,
@@ -45,6 +46,7 @@ def _serialize_matrices(info: dict) -> dict:
 def _serialize_modal(res: dict) -> dict:
     return {
         "n": int(res["n"]),
+        "eigenvalues": res["eigenvalues"].tolist(),
         "omega": res["omega"].tolist(),
         "frequencies_hz": res["frequencies_hz"].tolist(),
         "periods_s": res["periods_s"].tolist(),
@@ -73,8 +75,33 @@ def _serialize_earthquake(res: dict) -> dict:
         "peak_base_shear_kn": float(res["peak_base_shear_kn"]),
         "pga_g": float(res["pga_g"]),
         "damping_ratio": float(res["damping_ratio"]),
+        "risk_level": str(res["risk_level"]),
         "modal": _serialize_modal(res["modal"]),
     }
+
+
+def _resolve_building_id(
+    building_id_raw: object,
+    name: str | None,
+    building_type: str | None,
+    damping_ratio: float,
+    masses: list[float] | object,
+    stiffnesses: list[float] | object,
+) -> int:
+    if building_id_raw not in (None, ""):
+        existing = db.get_building(int(building_id_raw))
+        if not existing:
+            raise LookupError(f"Building {building_id_raw} not found.")
+        return int(existing["id"])
+    n = len(masses)
+    saved = db.save_building(
+        name=str(name or f"{n}-Story Frame"),
+        building_type=str(building_type or "Standard Shear Frame"),
+        damping_ratio=damping_ratio,
+        masses=masses,
+        stiffnesses=stiffnesses,
+    )
+    return int(saved["id"])
 
 
 async def index(_request: Request) -> FileResponse:
@@ -93,6 +120,55 @@ async def presets(_request: Request) -> JSONResponse:
     return JSONResponse({"presets": [{"name": k, "description": v} for k, v in GROUND_MOTIONS.items()]})
 
 
+async def api_buildings(request: Request) -> JSONResponse:
+    if request.method == "GET":
+        return JSONResponse({"buildings": db.list_buildings()})
+    try:
+        body = await request.json()
+        building = db.save_building(
+            name=body.get("name") or body.get("building_name") or "Building",
+            building_type=body.get("building_type", "Standard Shear Frame"),
+            damping_ratio=float(body.get("damping_ratio", 0.05)),
+            masses=body["masses"],
+            stiffnesses=body["stiffnesses"],
+        )
+        return JSONResponse({"building": building}, status_code=201)
+    except (KeyError, TypeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+async def api_building_detail(request: Request) -> JSONResponse:
+    building_id = int(request.path_params["building_id"])
+    if request.method == "GET":
+        building = db.get_building(building_id)
+        if not building:
+            return JSONResponse({"error": "Building not found."}, status_code=404)
+        return JSONResponse({"building": building})
+    deleted = db.delete_building(building_id)
+    if not deleted:
+        return JSONResponse({"error": "Building not found."}, status_code=404)
+    return JSONResponse({"deleted": True, "id": building_id})
+
+
+async def api_history(request: Request) -> JSONResponse:
+    if request.method == "DELETE":
+        db.clear_history()
+        return JSONResponse({"cleared": True})
+    return JSONResponse({"history": db.list_history()})
+
+
+async def api_run_detail(request: Request) -> JSONResponse:
+    run_type = request.path_params["run_type"]
+    run_id = int(request.path_params["run_id"])
+    try:
+        detail = db.get_run_detail(run_type, run_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if not detail:
+        return JSONResponse({"error": "Run not found."}, status_code=404)
+    return JSONResponse({"run": detail})
+
+
 async def api_matrices(request: Request) -> JSONResponse:
     try:
         body = await request.json()
@@ -106,14 +182,31 @@ async def api_matrices(request: Request) -> JSONResponse:
 async def api_modal(request: Request) -> JSONResponse:
     try:
         body = await request.json()
-        M = assemble_mass_matrix(body["masses"])
-        K = assemble_stiffness_matrix(body["stiffnesses"])
+        masses = body["masses"]
+        stiffnesses = body["stiffnesses"]
+        M = assemble_mass_matrix(masses)
+        K = assemble_stiffness_matrix(stiffnesses)
+        matrices_payload = _serialize_matrices(analyze_matrices(M, K))
+        modal_payload = _serialize_modal(solve_modal_analysis(M, K))
+        building_id = _resolve_building_id(
+            body.get("building_id"),
+            body.get("building_name") or body.get("name"),
+            body.get("building_type"),
+            float(body.get("damping_ratio", 0.05)),
+            masses,
+            stiffnesses,
+        )
+        saved_modal = db.save_modal_analysis(building_id, matrices_payload, modal_payload)
         return JSONResponse(
             {
-                "matrices": _serialize_matrices(analyze_matrices(M, K)),
-                "modal": _serialize_modal(solve_modal_analysis(M, K)),
+                "building_id": building_id,
+                "modal_id": saved_modal["id"],
+                "matrices": matrices_payload,
+                "modal": modal_payload,
             }
         )
+    except LookupError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
     except (KeyError, TypeError, ValueError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -121,24 +214,50 @@ async def api_modal(request: Request) -> JSONResponse:
 async def api_earthquake(request: Request) -> JSONResponse:
     try:
         body = await request.json()
-        M = assemble_mass_matrix(body["masses"])
-        K = assemble_stiffness_matrix(body["stiffnesses"])
+        masses = body["masses"]
+        stiffnesses = body["stiffnesses"]
+        M = assemble_mass_matrix(masses)
+        K = assemble_stiffness_matrix(stiffnesses)
         damping = float(body.get("damping_ratio", 0.05))
         if "t" in body and "accel_g" in body:
             t = np.asarray(body["t"], dtype=float)
             ag = np.asarray(body["accel_g"], dtype=float)
+            record_name = str(body.get("record_name", "Custom Series"))
+            duration_s = float(t[-1] - t[0]) if t.size > 1 else 0.0
+            source_type = "series"
         else:
             preset = body.get("preset_name", "Broadband Seismic Pulse")
             duration_s = float(body.get("duration_s", 20.0))
             pga_g = float(body.get("pga_g", 0.30))
             t, ag = generate_ground_motion(preset, duration_s=duration_s, dt=0.01, pga_g=pga_g)
+            record_name = str(preset)
+            source_type = "preset"
         res = simulate_earthquake(M, K, damping, t, ag)
+        matrices_payload = _serialize_matrices(analyze_matrices(M, K))
+        eq_payload = _serialize_earthquake(res)
+        building_id = _resolve_building_id(
+            body.get("building_id"),
+            body.get("building_name") or body.get("name"),
+            body.get("building_type"),
+            damping,
+            masses,
+            stiffnesses,
+        )
+        saved_modal = db.save_modal_analysis(building_id, matrices_payload, eq_payload["modal"])
+        saved_run = db.save_earthquake_run(
+            building_id, saved_modal["id"], source_type, record_name, duration_s, eq_payload
+        )
         return JSONResponse(
             {
-                "matrices": _serialize_matrices(analyze_matrices(M, K)),
-                "earthquake": _serialize_earthquake(res),
+                "building_id": building_id,
+                "modal_id": saved_modal["id"],
+                "run_id": saved_run["id"],
+                "matrices": matrices_payload,
+                "earthquake": eq_payload,
             }
         )
+    except LookupError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
     except (KeyError, TypeError, ValueError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -163,16 +282,40 @@ async def api_earthquake_csv(request: Request) -> JSONResponse:
                 continue  # skip header row
         M = assemble_mass_matrix(masses)
         K = assemble_stiffness_matrix(stiffnesses)
-        res = simulate_earthquake(M, K, damping, np.array(t_vals), np.array(ag_vals))
+        t_arr = np.array(t_vals)
+        res = simulate_earthquake(M, K, damping, t_arr, np.array(ag_vals))
+        matrices_payload = _serialize_matrices(analyze_matrices(M, K))
+        eq_payload = _serialize_earthquake(res)
+        building_id = _resolve_building_id(
+            form.get("building_id"),
+            form.get("building_name"),
+            form.get("building_type"),
+            damping,
+            masses,
+            stiffnesses,
+        )
+        saved_modal = db.save_modal_analysis(building_id, matrices_payload, eq_payload["modal"])
+        record_name = getattr(upload, "filename", None) or "Uploaded CSV"
+        duration_s = float(t_arr[-1] - t_arr[0]) if t_arr.size > 1 else 0.0
+        saved_run = db.save_earthquake_run(
+            building_id, saved_modal["id"], "csv", record_name, duration_s, eq_payload
+        )
         return JSONResponse(
             {
-                "matrices": _serialize_matrices(analyze_matrices(M, K)),
-                "earthquake": _serialize_earthquake(res),
+                "building_id": building_id,
+                "modal_id": saved_modal["id"],
+                "run_id": saved_run["id"],
+                "matrices": matrices_payload,
+                "earthquake": eq_payload,
             }
         )
+    except LookupError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
     except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
+
+db.init_db()
 
 app = Starlette(
     routes=[
@@ -180,6 +323,10 @@ app = Starlette(
         Route("/favicon.ico", favicon),
         Route("/api/health", health),
         Route("/api/presets", presets),
+        Route("/api/buildings", api_buildings, methods=["GET", "POST"]),
+        Route("/api/buildings/{building_id:int}", api_building_detail, methods=["GET", "DELETE"]),
+        Route("/api/history", api_history, methods=["GET", "DELETE"]),
+        Route("/api/runs/{run_type:str}/{run_id:int}", api_run_detail, methods=["GET"]),
         Route("/api/matrices", api_matrices, methods=["POST"]),
         Route("/api/modal", api_modal, methods=["POST"]),
         Route("/api/earthquake", api_earthquake, methods=["POST"]),

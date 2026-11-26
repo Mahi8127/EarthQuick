@@ -224,6 +224,7 @@ def simulate_earthquake(
     peak_floor_disp_mm = np.max(np.abs(u_m), axis=1) * 1000.0
     peak_story_drift_mm = np.max(np.abs(drifts_m), axis=1) * 1000.0
     critical_story = int(np.argmax(peak_story_drift_mm)) + 1
+    max_drift_mm = float(np.max(peak_story_drift_mm))
 
     return {
         "n": n,
@@ -235,10 +236,23 @@ def simulate_earthquake(
         "peak_floor_disp_mm": peak_floor_disp_mm,
         "peak_story_drift_mm": peak_story_drift_mm,
         "peak_roof_disp_mm": float(peak_floor_disp_mm[-1]),
-        "max_interstory_drift_mm": float(np.max(peak_story_drift_mm)),
+        "max_interstory_drift_mm": max_drift_mm,
         "critical_story": critical_story,
         "peak_base_shear_kn": float(np.max(np.abs(base_shear_ts))),
         "pga_g": float(np.max(np.abs(ag_arr))),
         "damping_ratio": float(damping_ratio),
+        "risk_level": classify_seismic_risk(max_drift_mm),
         "modal": modal,
     }
+
+
+def classify_seismic_risk(max_interstory_drift_mm: float, story_height_mm: float = 3500.0) -> str:
+    """Classify structural drift demand using standard interstory drift ratio thresholds."""
+    ratio = float(max_interstory_drift_mm) / float(story_height_mm)
+    if ratio < 0.002:
+        return "Low"
+    if ratio < 0.005:
+        return "Moderate"
+    if ratio < 0.015:
+        return "High"
+    return "Severe"

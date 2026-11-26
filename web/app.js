@@ -8,6 +8,7 @@ const THEME_KEY = 'earthquick_theme_v1';
 const state = {
   view: 'overview',
   savedModel: null,
+  savedBuildings: [],
   isDirty: false,
   matrices: null,
   modal: null,
@@ -193,6 +194,7 @@ function switchView(viewId) {
     scrubber.disabled = true;
     const idx = Number(document.getElementById('mode-select').value || 0);
     scene3d.setModeShape(state.modal.phi_normalized.map((row) => row[idx]), state.modal.frequencies_hz[idx]);
+    requestAnimationFrame(() => renderModalCharts(state.modal));
   } else if (viewId === 'quake' && state.quake) {
     badge.textContent = '3D Quake';
     scrubber.disabled = false;
@@ -417,41 +419,25 @@ function requireSavedConfig() {
   return state.savedModel;
 }
 
-async function runMatrices() {
-  const cfg = requireSavedConfig();
-  if (!cfg) return;
-  const res = await fetch('/api/matrices', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ masses: cfg.masses, stiffnesses: cfg.stiffnesses }),
-  });
-  const data = await res.json();
-  if (!res.ok) return alert(data.error);
+function renderMatricesResults(data) {
   state.matrices = data;
-
   document.getElementById('mat-dim').textContent = `${data.n} × ${data.n}`;
   document.getElementById('mat-spd').textContent = data.is_spd ? 'Passed' : 'Failed';
   document.getElementById('mat-cond').textContent = data.cond_k.toFixed(1);
   document.getElementById('mat-sparse').textContent = `${data.sparsity_pct.toFixed(0)}%`;
   renderHeatmap('heatmap-m', data.M);
   renderHeatmap('heatmap-k', data.K);
-  refreshStatusUI();
 }
 
-async function runModal() {
-  const cfg = requireSavedConfig();
-  if (!cfg) return;
-  const res = await fetch('/api/modal', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ masses: cfg.masses, stiffnesses: cfg.stiffnesses }),
-  });
-  const data = await res.json();
-  if (!res.ok) return alert(data.error);
-  state.matrices = data.matrices;
-  state.modal = data.modal;
+function renderModalCharts(mod) {
+  drawModeShapeChart(mod.phi_normalized);
+  drawBarChart('chart-mode-mass', mod.frequencies_hz.map((_, i) => `M${i + 1}`), [
+    { name: 'Weight %', data: mod.mass_ratio_pct, color: '#38bdf8' },
+  ]);
+}
 
-  const mod = data.modal;
+function renderModalResults(mod) {
+  state.modal = mod;
   document.getElementById('mod-f1').textContent = `${mod.frequencies_hz[0].toFixed(2)} Hz`;
   document.getElementById('mod-t1').textContent = `${mod.periods_s[0].toFixed(2)} s`;
   document.getElementById('mod-m1').textContent = `${mod.mass_ratio_pct[0].toFixed(0)}%`;
@@ -476,26 +462,54 @@ async function runModal() {
     </tr>
   `).join('');
 
-  drawModeShapeChart(mod.phi_normalized);
-  drawBarChart('chart-mode-mass', mod.frequencies_hz.map((_, i) => `M${i + 1}`), [{ name: 'Weight %', data: mod.mass_ratio_pct, color: '#38bdf8' }]);
+  if (state.view === 'modes') {
+    requestAnimationFrame(() => renderModalCharts(mod));
+  }
+}
 
-  recordHistory({
-    time: new Date().toLocaleTimeString(),
-    type: 'Modes',
-    building: cfg.building_name,
-    floors: cfg.floors,
-    t1_s: mod.periods_s[0].toFixed(2),
-    roof_mm: '-',
-    drift_mm: '-',
+async function runMatrices() {
+  const cfg = requireSavedConfig();
+  if (!cfg) return;
+  const res = await fetch('/api/matrices', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ masses: cfg.masses, stiffnesses: cfg.stiffnesses }),
   });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error);
+  renderMatricesResults(data);
+  refreshStatusUI();
+}
+
+async function runModal() {
+  const cfg = requireSavedConfig();
+  if (!cfg) return;
+  const res = await fetch('/api/modal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      building_id: cfg.id || null,
+      building_name: cfg.building_name,
+      building_type: cfg.building_type,
+      damping_ratio: cfg.damping_ratio,
+      masses: cfg.masses,
+      stiffnesses: cfg.stiffnesses,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error);
+  if (data.building_id && state.savedModel && !state.savedModel.id) {
+    state.savedModel.id = data.building_id;
+    await refreshSavedBuildings();
+  }
+  renderMatricesResults(data.matrices);
+  renderModalResults(data.modal);
+  await refreshHistoryFromDb();
 
   document.getElementById('vp-mode-badge').textContent = '3D Mode';
-  scene3d.setModeShape(mod.phi_normalized.map((r) => r[0]), mod.frequencies_hz[0]);
+  scene3d.setModeShape(data.modal.phi_normalized.map((r) => r[0]), data.modal.frequencies_hz[0]);
   refreshStatusUI();
-  requestAnimationFrame(() => {
-    drawModeShapeChart(mod.phi_normalized);
-    drawBarChart('chart-mode-mass', mod.frequencies_hz.map((_, i) => `M${i + 1}`), [{ name: 'Weight %', data: mod.mass_ratio_pct, color: '#38bdf8' }]);
-  });
+  requestAnimationFrame(() => renderModalCharts(data.modal));
 }
 
 async function runEarthquake() {
@@ -513,6 +527,9 @@ async function runEarthquake() {
       return;
     }
     const fd = new FormData();
+    if (cfg.id) fd.append('building_id', String(cfg.id));
+    fd.append('building_name', cfg.building_name);
+    fd.append('building_type', cfg.building_type);
     fd.append('masses', cfg.masses.join(','));
     fd.append('stiffnesses', cfg.stiffnesses.join(','));
     fd.append('damping_ratio', String(cfg.damping_ratio));
@@ -523,6 +540,9 @@ async function runEarthquake() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        building_id: cfg.id || null,
+        building_name: cfg.building_name,
+        building_type: cfg.building_type,
         masses: cfg.masses,
         stiffnesses: cfg.stiffnesses,
         damping_ratio: cfg.damping_ratio,
@@ -540,13 +560,18 @@ async function runEarthquake() {
     return;
   }
 
-  state.matrices = data.matrices;
-  state.modal = data.earthquake.modal;
+  if (data.building_id && state.savedModel && !state.savedModel.id) {
+    state.savedModel.id = data.building_id;
+    await refreshSavedBuildings();
+  }
+
+  renderMatricesResults(data.matrices);
+  renderModalResults(data.earthquake.modal);
   state.quake = data.earthquake;
 
   const eq = data.earthquake;
   document.getElementById('eq-roof').textContent = `${eq.peak_roof_disp_mm.toFixed(1)} mm`;
-  document.getElementById('eq-drift').textContent = `${eq.max_interstory_drift_mm.toFixed(1)} mm`;
+  document.getElementById('eq-drift').textContent = `${eq.max_interstory_drift_mm.toFixed(1)} mm (${eq.risk_level})`;
   document.getElementById('eq-shear').textContent = `${Math.round(eq.peak_base_shear_kn).toLocaleString()} kN`;
   document.getElementById('eq-pga').textContent = `${eq.pga_g.toFixed(2)} g`;
 
@@ -568,28 +593,7 @@ async function runEarthquake() {
     </tr>
   `).join('');
 
-  const stamp = new Date().toLocaleTimeString();
-  recordHistory({
-    time: stamp,
-    type: 'Quake',
-    building: cfg.building_name,
-    floors: cfg.floors,
-    t1_s: eq.modal.periods_s[0].toFixed(2),
-    roof_mm: eq.peak_roof_disp_mm.toFixed(1),
-    drift_mm: eq.max_interstory_drift_mm.toFixed(1),
-  });
-
-  state.compareRuns.unshift({
-    label: `${stamp} · ${cfg.building_name} (${cfg.floors}F)`,
-    building: cfg.building_name,
-    stories: cfg.floors,
-    t1_s: eq.modal.periods_s[0],
-    roof_mm: eq.peak_roof_disp_mm,
-    drift_mm: eq.max_interstory_drift_mm,
-    shear_kn: eq.peak_base_shear_kn,
-    drift_profile: eq.peak_story_drift_mm,
-  });
-  renderCompareSelectors();
+  await refreshHistoryFromDb();
 
   document.getElementById('vp-mode-badge').textContent = '3D Quake';
   document.getElementById('vp-scrubber').disabled = false;
@@ -641,13 +645,6 @@ function updateCompareView() {
   ]);
 }
 
-function recordHistory(entry) {
-  state.history.unshift(entry);
-  state.history = state.history.slice(0, 30);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.history));
-  renderHistoryTable();
-}
-
 function renderHistoryTable() {
   const tbody = document.querySelector('#history-table tbody');
   tbody.innerHTML = state.history.map((r) => `
@@ -658,9 +655,106 @@ function renderHistoryTable() {
       <td data-label="Floors">${r.floors}</td>
       <td data-label="T₁ (s)">${r.t1_s}</td>
       <td data-label="Roof (mm)">${r.roof_mm}</td>
-      <td data-label="Max shift (mm)">${r.drift_mm}</td>
+      <td data-label="Max shift (mm)">${r.risk_level ? `${r.drift_mm} (${r.risk_level})` : r.drift_mm}</td>
     </tr>
   `).join('');
+}
+
+function applyBuildingToForm(b) {
+  document.getElementById('b-name').value = b.name;
+  const typeSel = document.getElementById('b-type');
+  const hasType = [...typeSel.options].some((o) => o.value === b.building_type);
+  typeSel.value = hasType ? b.building_type : typeSel.options[0].value;
+  document.getElementById('b-floors').value = String(b.floors);
+  document.getElementById('b-floors-out').textContent = String(b.floors);
+  document.getElementById('b-damping').value = String(b.damping_ratio);
+  renderFloorRows(b.floors, b.masses, b.stiffnesses);
+
+  state.savedModel = {
+    id: b.id,
+    building_name: b.name,
+    building_type: b.building_type,
+    floors: b.floors,
+    damping_ratio: b.damping_ratio,
+    masses: b.masses,
+    stiffnesses: b.stiffnesses,
+  };
+  state.isDirty = false;
+  state.matrices = null;
+  state.modal = null;
+  state.quake = null;
+  scene3d.rebuildBuilding(b.floors, b.masses, b.stiffnesses);
+  refreshStatusUI();
+}
+
+async function refreshSavedBuildings(selectedId = null) {
+  try {
+    const res = await fetch('/api/buildings');
+    if (!res.ok) return;
+    const data = await res.json();
+    state.savedBuildings = data.buildings || [];
+    const bar = document.getElementById('saved-buildings-bar');
+    const sel = document.getElementById('saved-building-select');
+    bar.hidden = state.savedBuildings.length === 0;
+    sel.innerHTML = '';
+    state.savedBuildings.forEach((b) => sel.add(new Option(`${b.name} (${b.floors}F)`, String(b.id))));
+    const activeId = selectedId ?? state.savedModel?.id;
+    if (activeId && state.savedBuildings.some((b) => b.id === activeId)) {
+      sel.value = String(activeId);
+    }
+  } catch {}
+}
+
+async function saveBuildingToDb(cfg) {
+  const res = await fetch('/api/buildings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: cfg.building_name,
+      building_type: cfg.building_type,
+      damping_ratio: cfg.damping_ratio,
+      masses: cfg.masses,
+      stiffnesses: cfg.stiffnesses,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to save building.');
+  const b = data.building;
+  state.savedModel = { ...cfg, id: b.id };
+  state.isDirty = false;
+  state.matrices = null;
+  state.modal = null;
+  state.quake = null;
+  await refreshSavedBuildings(b.id);
+  refreshStatusUI();
+  return b;
+}
+
+async function refreshHistoryFromDb() {
+  try {
+    const res = await fetch('/api/history');
+    if (!res.ok) return;
+    const data = await res.json();
+    state.history = data.history || [];
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.history.slice(0, 30)));
+    state.compareRuns = state.history
+      .filter((r) => r.run_type === 'quake' && Array.isArray(r.drift_profile))
+      .map((r) => ({
+        label: `${r.time} · ${r.building} (${r.floors}F)`,
+        building: r.building,
+        stories: r.floors,
+        t1_s: r.t1_num || 0,
+        roof_mm: r.roof_num || 0,
+        drift_mm: r.drift_num || 0,
+        shear_kn: r.shear_kn || 0,
+        drift_profile: r.drift_profile,
+      }));
+    renderHistoryTable();
+    renderCompareSelectors();
+  } catch {
+    try { state.history = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch { state.history = []; }
+    renderHistoryTable();
+  }
 }
 
 function downloadCsv(filename, rows) {
@@ -680,9 +774,6 @@ async function boot() {
   await initNavbar();
   initTabs();
 
-  try { state.history = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch { state.history = []; }
-  renderHistoryTable();
-
   scene3d = new BuildingScene3D(document.getElementById('scene3d-canvas'), ({ time, roofMm, frac }) => {
     document.getElementById('vp-readout').textContent = `t = ${time.toFixed(2)} s · Roof = ${roofMm.toFixed(1)} mm`;
     if (state.view === 'quake' || document.getElementById('vp-mode-badge').textContent === '3D Quake') {
@@ -693,11 +784,18 @@ async function boot() {
 
   renderFloorRows(4);
 
-  const presetsRes = await fetch('/api/presets');
-  const presetsJson = await presetsRes.json();
+  const [presetsJson] = await Promise.all([
+    fetch('/api/presets').then((r) => r.json()).catch(() => ({ presets: [] })),
+    refreshSavedBuildings(),
+    refreshHistoryFromDb(),
+  ]);
   state.presets = presetsJson.presets || [];
   const presetSel = document.getElementById('q-preset');
   state.presets.forEach((p) => presetSel.add(new Option(p.name, p.name)));
+
+  if (state.savedBuildings.length > 0) {
+    applyBuildingToForm(state.savedBuildings[0]);
+  }
 
   // Navigation events
   document.querySelectorAll('[data-nav]').forEach((el) => {
@@ -719,6 +817,33 @@ async function boot() {
     if (e.target.id !== 'b-floors') markDirtyAndSync3D();
   });
 
+  document.getElementById('saved-building-select').addEventListener('change', (e) => {
+    const picked = state.savedBuildings.find((b) => String(b.id) === e.target.value);
+    if (picked) {
+      applyBuildingToForm(picked);
+      document.getElementById('save-feedback').textContent = `Loaded "${picked.name}"`;
+    }
+  });
+
+  document.getElementById('delete-building-btn').addEventListener('click', async () => {
+    const id = Number(document.getElementById('saved-building-select').value);
+    if (!id) return;
+    const res = await fetch(`/api/buildings/${id}`, { method: 'DELETE' });
+    if (!res.ok) return;
+    if (state.savedModel?.id === id) {
+      state.savedModel = null;
+      state.isDirty = false;
+      state.matrices = null;
+      state.modal = null;
+      state.quake = null;
+    }
+    await Promise.all([refreshSavedBuildings(), refreshHistoryFromDb()]);
+    if (state.savedBuildings.length > 0 && !state.savedModel) {
+      applyBuildingToForm(state.savedBuildings[0]);
+    }
+    refreshStatusUI();
+  });
+
   document.getElementById('apply-u-mass').addEventListener('click', () => {
     const val = Number(document.getElementById('u-mass').value);
     if (val > 0) document.querySelectorAll('.m-in').forEach((el) => { el.value = String(val); });
@@ -731,7 +856,7 @@ async function boot() {
     markDirtyAndSync3D();
   });
 
-  document.getElementById('building-form').addEventListener('submit', (e) => {
+  document.getElementById('building-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
     if (!form.checkValidity()) {
@@ -739,13 +864,12 @@ async function boot() {
       form.querySelector(':invalid')?.focus();
       return;
     }
-    state.savedModel = getDraftConfig();
-    state.isDirty = false;
-    state.matrices = null;
-    state.modal = null;
-    state.quake = null;
-    document.getElementById('save-feedback').textContent = `Saved at ${new Date().toLocaleTimeString()}`;
-    refreshStatusUI();
+    try {
+      const saved = await saveBuildingToDb(getDraftConfig());
+      document.getElementById('save-feedback').textContent = `Saved (#${saved.id}) at ${new Date().toLocaleTimeString()}`;
+    } catch (err) {
+      document.getElementById('save-feedback').textContent = err.message;
+    }
   });
 
   document.getElementById('reset-model-btn').addEventListener('click', () => {
@@ -798,8 +922,12 @@ async function boot() {
   document.getElementById('vp-reset-cam').addEventListener('click', () => scene3d.resetCamera());
   document.getElementById('vp-demo-quake').addEventListener('click', async () => {
     if (!state.savedModel || state.isDirty) {
-      state.savedModel = getDraftConfig();
-      state.isDirty = false;
+      try {
+        await saveBuildingToDb(getDraftConfig());
+      } catch {
+        state.savedModel = getDraftConfig();
+        state.isDirty = false;
+      }
     }
     await runEarthquake();
     scene3d.setPlaying(true);
@@ -822,12 +950,14 @@ async function boot() {
     downloadCsv('seismic_envelope.csv', rows);
   });
   document.getElementById('dl-history-csv').addEventListener('click', () => {
-    const rows = [['Time', 'Type', 'Building', 'Floors', 'T1_s', 'Roof_mm', 'Max_Shift_mm']];
-    state.history.forEach((h) => rows.push([h.time, h.type, h.building, h.floors, h.t1_s, h.roof_mm, h.drift_mm]));
+    const rows = [['Time', 'Type', 'Building', 'Floors', 'T1_s', 'Roof_mm', 'Max_Shift_mm', 'Risk_Level']];
+    state.history.forEach((h) => rows.push([h.time, h.type, h.building, h.floors, h.t1_s, h.roof_mm, h.drift_mm, h.risk_level || '']));
     downloadCsv('earthquick_history.csv', rows);
   });
-  document.getElementById('clear-history-btn').addEventListener('click', () => {
+  document.getElementById('clear-history-btn').addEventListener('click', async () => {
+    await fetch('/api/history', { method: 'DELETE' }).catch(() => {});
     state.history = [];
+    state.compareRuns = [];
     localStorage.removeItem(STORAGE_KEY);
     renderHistoryTable();
     refreshStatusUI();
